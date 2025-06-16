@@ -1,1 +1,0 @@
-estimated_memory_gb
