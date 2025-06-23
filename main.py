@@ -10,13 +10,30 @@ from rich.progress import (
     TaskProgressColumn,
 )
 import multiprocessing as mp
+import gc
+import psutil
+
+# Pre-computed constants to avoid repeated calculations
+CONST_6 = mpz(6)
+CONST_2 = mpz(2)
+CONST_5 = mpz(5)
+CONST_1 = mpz(1)
+CONST_426880 = mpz(426880)
+CONST_13591409 = mpz(13591409)
+CONST_545140134 = mpz(545140134)
+CONST_10939058860032000 = mpz(10939058860032000)
 
 
 def binary_split(a, b):
     if b == a + 1:
-        Pab = mpz(-(6 * a - 5) * (2 * a - 1) * (6 * a - 1))
-        Qab = mpz(10939058860032000 * a**3)
-        Rab = mpz(Pab * (545140134 * a + 13591409))
+        a_mpz = mpz(a)
+        Pab = -(
+            (CONST_6 * a_mpz - CONST_5)
+            * (CONST_2 * a_mpz - CONST_1)
+            * (CONST_6 * a_mpz - CONST_1)
+        )
+        Qab = CONST_10939058860032000 * (a_mpz**3)
+        Rab = Pab * (CONST_545140134 * a_mpz + CONST_13591409)
     else:
         m = (a + b) // 2
         Pam, Qam, Ram = binary_split(a, m)
@@ -25,6 +42,22 @@ def binary_split(a, b):
         Qab = Qam * Qmb
         Rab = Qmb * Ram + Pam * Rmb
     return Pab, Qab, Rab
+
+
+def get_optimal_chunk_size(start, end, num_cores):
+    total_terms = end - start
+    available_memory_gb = psutil.virtual_memory().available / (1024**3)
+
+    # Estimate memory per chunk (very rough)
+    memory_per_term_mb = 0.05  # Conservative estimate
+    max_terms_by_memory = int(available_memory_gb * 1024 / memory_per_term_mb * 0.7)
+
+    # More chunks for better load balancing
+    optimal_chunks = num_cores * 4
+    chunk_size_by_cores = total_terms // optimal_chunks
+    chunk_size_by_memory = max_terms_by_memory // optimal_chunks
+
+    return max(min(chunk_size_by_cores, chunk_size_by_memory), 1)
 
 
 def parallel_binary_split(start, end, progress: Progress):
@@ -38,7 +71,8 @@ def parallel_binary_split(start, end, progress: Progress):
     def task_callback(_):
         progress.update(split_task, advance=1)
 
-    with mp.Pool(processes=num_cores) as pool:
+    max_workers = min(num_cores * 2, len(chunks))  # Don't exceed chunk count
+    with mp.Pool(processes=max_workers) as pool:
         result_objects = [
             pool.apply_async(binary_split, chunk, callback=task_callback)
             for chunk in chunks
@@ -70,8 +104,8 @@ def parallel_binary_split(start, end, progress: Progress):
 
 
 def chudnovsky_pi(digits: int, progress: Progress):
-    gmpy2.get_context().precision = digits * 4
-    n = digits // 14 + 10
+    gmpy2.get_context().precision = digits * 4  # Keep original precision
+    n = int(digits * 0.0715) + 50
 
     for attempt in range(50):
         result, split_time, merge_time = parallel_binary_split(1, n + 1, progress)
@@ -84,25 +118,21 @@ def chudnovsky_pi(digits: int, progress: Progress):
         sqrt_end = time.time()
         progress.update(sqrt_task, advance=1)
 
-        assemble_task = progress.add_task("Assembling π...", total=5)
+        assemble_task = progress.add_task("Assembling π...", total=3)
         pi_start = time.time()
-        term1 = mpfr(426880) * sqrt10005
+
+        # Combine operations to reduce intermediate allocations
+        numerator = CONST_426880 * sqrt10005 * Q
         progress.update(assemble_task, advance=1)
-        time.sleep(0.01)  # tiny pause to let the UI catch up
-        term1 = term1 * Q
+
+        denominator = CONST_13591409 * Q + R
         progress.update(assemble_task, advance=1)
-        time.sleep(0.01)
-        term2 = 13591409 * Q
-        progress.update(assemble_task, advance=1)
-        time.sleep(0.01)
-        term2 += R
-        progress.update(assemble_task, advance=1)
-        time.sleep(0.01)
-        pi = term1 / term2
+
+        pi = numerator / denominator
         progress.update(assemble_task, advance=1)
         pi_end = time.time()
 
-        pi_str = str(pi)
+        pi_str = format(pi, f".{digits}f")
         decimal_pos = pi_str.find(".")
         if decimal_pos == -1:
             continue
@@ -124,11 +154,16 @@ def benchmark_and_calculate(precision, save_to_file=False):
     formatted_precision = f"{precision:,}"
     console = Console()
     num_cores = mp.cpu_count()
+    available_memory_gb = psutil.virtual_memory().available / (1024**3)
+
     console.print(
-        f"[bold blue]Calculating π to {formatted_precision} decimal places using Chudnovsky algorithm...[/bold blue]"
+        f"[bold blue]Calculating π to {formatted_precision} decimal places using optimized Chudnovsky algorithm...[/bold blue]"
     )
     console.print(
         f"[bold cyan]System has {num_cores} CPU cores available for calculation[/bold cyan]"
+    )
+    console.print(
+        f"[bold cyan]Available memory: {available_memory_gb:.1f} GB[/bold cyan]"
     )
 
     if precision > 10_000_000:
@@ -159,13 +194,13 @@ def benchmark_and_calculate(precision, save_to_file=False):
     else:
         time_str = f"{elapsed / 60:.2f} minutes"
 
-    console.print(f"[cyan]Terms were split in {elapsed:.2f} seconds[/cyan]")
+    console.print(f"[cyan]Terms were split in {split_time:.2f} seconds[/cyan]")
     console.print(f"[cyan]Terms were merged in {merge_time:.2f} seconds[/cyan]")
     console.print(f"[cyan]√10005 was computed in {sqrt_time:.2f} seconds[/cyan]")
     console.print(f"[cyan]π was assembled in {pi_time:.2f} seconds[/cyan]")
 
     console.print(
-        f"[bold green]Calculation completed in {time_str} using {num_cores} CPU cores[/bold green]"
+        f"[bold green]Calculation completed in {time_str} using up to {min(num_cores * 2, mp.cpu_count())} processes[/bold green]"
     )
 
     decimal_part = result.split(".")[1] if "." in result else ""
@@ -203,7 +238,7 @@ def benchmark_and_calculate(precision, save_to_file=False):
         with open(f"pi_{formatted_precision}.txt", "w") as f:
             f.write(result)
         console.print(
-            f"[bold green]π to {formatted_precision} decimal places saved to pi.txt[/bold green]"
+            f"[bold green]π to {formatted_precision} decimal places saved to pi_{formatted_precision}.txt[/bold green]"
         )
     else:
         console.print(

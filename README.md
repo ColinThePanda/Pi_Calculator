@@ -115,11 +115,11 @@ Performance varies based on system specifications. Results below are from testin
 
 | Decimal Places | Time         | Memory Usage |
 | -------------- | ------------ | ------------ |
-| 10,000         | 330 ms       | < 10 MB      |
-| 100,000        | 372 ms       | < 50 MB      |
-| 1,000,000      | 746 ms       | < 100 MB     |
-| 10,000,000     | 6.72 seconds | < 150 MB     |
-| 100,000,000    | 1.54 minutes | ~1.4 GB      |
+| 10,000         | 397 ms       | < 10 MB      |
+| 100,000        | 463 ms       | < 50 MB      |
+| 1,000,000      | 869 ms       | < 100 MB     |
+| 10,000,000     | 6.30 seconds | < 150 MB     |
+| 100,000,000    | 1.46 minutes | ~1.4 GB      |
 
 ### Memory Requirements
 
